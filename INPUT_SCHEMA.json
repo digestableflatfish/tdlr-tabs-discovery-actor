@@ -1,0 +1,66 @@
+{
+  "title": "TDLR TABS Discovery Actor",
+  "description": "Discovers project numbers from Texas TDLR TABS search page by date range and filters",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "startDate": {
+      "title": "Registration Start Date",
+      "type": "string",
+      "description": "Start date for project registration filter (YYYY-MM-DD format)",
+      "editor": "textfield",
+      "prefill": ""
+    },
+    "endDate": {
+      "title": "Registration End Date",
+      "type": "string",
+      "description": "End date for project registration filter (YYYY-MM-DD format)",
+      "editor": "textfield",
+      "prefill": ""
+    },
+    "city": {
+      "title": "City Filter",
+      "type": "string",
+      "description": "Optional city filter",
+      "editor": "textfield",
+      "nullable": true
+    },
+    "county": {
+      "title": "County Filter",
+      "type": "string",
+      "description": "Optional county filter",
+      "editor": "textfield",
+      "nullable": true
+    },
+    "status": {
+      "title": "Project Status Filter",
+      "type": "string",
+      "description": "Optional status filter (e.g., 'Project Registered', 'Review Complete')",
+      "editor": "textfield",
+      "nullable": true
+    },
+    "maxResults": {
+      "title": "Maximum Results",
+      "type": "integer",
+      "description": "Maximum number of projects to discover",
+      "default": 1000,
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "webhookUrl": {
+      "title": "Webhook URL",
+      "type": "string",
+      "description": "URL to send results when complete",
+      "editor": "textfield",
+      "nullable": true
+    },
+    "webhookPayload": {
+      "title": "Webhook Payload",
+      "type": "object",
+      "description": "Additional data to include in webhook call",
+      "editor": "json",
+      "nullable": true
+    }
+  },
+  "required": ["startDate", "endDate"]
+}

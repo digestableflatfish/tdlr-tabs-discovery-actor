@@ -1,0 +1,11 @@
+{
+  "name": "tdlr-tabs-discovery",
+  "version": "1.0.0",
+  "buildTag": "latest",
+  "env": null,
+  "defaultRunOptions": {
+    "build": "latest",
+    "memoryMbytes": 4096,
+    "timeoutSecs": 3600
+  }
+}

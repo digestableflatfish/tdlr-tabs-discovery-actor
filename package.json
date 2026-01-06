@@ -1,0 +1,19 @@
+{
+  "name": "tdlr-tabs-discovery",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Discovers TDLR project numbers from the Texas TABS search page",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "apify": "^3.1.0",
+    "crawlee": "^3.5.0",
+    "playwright": "^1.40.0"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "test": "echo 'No tests configured'"
+  },
+  "author": ""
+}
