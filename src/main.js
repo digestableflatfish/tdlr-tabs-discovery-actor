@@ -1,98 +1,88 @@
 
 import { Actor } from 'apify';
 
-const BASE = 'https://www.tdlr.texas.gov';
-const SEARCH_PAGE = `${BASE}/tabs/search`;
-const SEARCH_API = `${BASE}/TABS/Search/SearchProjects`;
+const SEARCH_PAGE = 'https://www.tdlr.texas.gov/tabs/search';
+const API = 'https://www.tdlr.texas.gov/TABS/Search/SearchProjects';
 
 const COLUMNS = [
-    'ProjectId',
-    'ProjectNumber',
-    'ProjectName',
-    'ProjectCreatedOn',
-    'ProjectStatus',
-    'FacilityName',
-    'City',
-    'County',
-    'TypeOfWork',
-    'EstimatedCost',
+    'ProjectId', 'ProjectNumber', 'ProjectName',
+    'ProjectCreatedOn', 'ProjectStatus', 'FacilityName',
+    'City', 'County', 'TypeOfWork', 'EstimatedCost',
     'DataVersionId',
 ];
 
-const sleep = (ms) =>
-    new Promise((resolve) => setTimeout(resolve, ms));
+const pause = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const iso = (d) => d.toISOString().slice(0, 10);
 
-function formatDate(value) {
+function date(value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        throw new Error(`Invalid date: ${value}. Use YYYY-MM-DD.`);
+        throw new Error(`Expected YYYY-MM-DD: ${value}`);
     }
-
-    const [year, month, day] = value.split('-');
-
-    const date = new Date(`${value}T00:00:00Z`);
-
-    if (
-        Number.isNaN(date.getTime()) ||
-        date.toISOString().slice(0, 10) !== value
-    ) {
-        throw new Error(`Invalid calendar date: ${value}`);
+    const d = new Date(`${value}T00:00:00Z`);
+    if (Number.isNaN(d.getTime()) || iso(d) !== value) {
+        throw new Error(`Invalid date: ${value}`);
     }
-
-    return `${month}/${day}/${year}`;
+    return d;
 }
 
-function makeBody(input, start, length, draw) {
-    const body = new URLSearchParams();
+function us(value) {
+    const [y, m, d] = value.split('-');
+    return `${m}/${d}/${y}`;
+}
 
-    body.set('draw', String(draw));
+function nextMonth(value) {
+    const d = date(value);
+    return iso(new Date(Date.UTC(
+        d.getUTCFullYear(),
+        d.getUTCMonth() + 1,
+        1
+    )));
+}
 
-    COLUMNS.forEach((name, index) => {
-        const prefix = `columns[${index}]`;
+function previousDay(value) {
+    return iso(new Date(date(value).getTime() - 86400000));
+}
 
-        body.set(`${prefix}[data]`, name);
-        body.set(`${prefix}[name]`, '');
-        body.set(`${prefix}[searchable]`, index === 10 ? 'false' : 'true');
-        body.set(`${prefix}[orderable]`, 'true');
-        body.set(`${prefix}[search][value]`, '');
-        body.set(`${prefix}[search][regex]`, 'false');
+function ranges(first, last) {
+    const out = [];
+    let cursor = first;
+
+    while (cursor <= last) {
+        const end = previousDay(nextMonth(cursor));
+        out.push([cursor, end < last ? end : last]);
+        cursor = nextMonth(cursor);
+    }
+    return out;
+}
+
+function body(startDate, endDate, offset, length, draw) {
+    const b = new URLSearchParams();
+    b.set('draw', String(draw));
+
+    COLUMNS.forEach((name, i) => {
+        const p = `columns[${i}]`;
+        b.set(`${p}[data]`, name);
+        b.set(`${p}[name]`, '');
+        b.set(`${p}[searchable]`, i === 10 ? 'false' : 'true');
+        b.set(`${p}[orderable]`, 'true');
+        b.set(`${p}[search][value]`, '');
+        b.set(`${p}[search][regex]`, 'false');
     });
 
-    body.set('order[0][column]', '3');
-    body.set('order[0][dir]', 'desc');
+    b.set('order[0][column]', '3');
+    b.set('order[0][dir]', 'desc');
+    b.set('start', String(offset));
+    b.set('length', String(length));
+    b.set('search[value]', '');
+    b.set('search[regex]', 'false');
+    b.set('RegistrationDateBegin', us(startDate));
+    b.set('RegistrationDateEnd', us(endDate));
 
-    body.set('start', String(start));
-    body.set('length', String(length));
-
-    body.set('search[value]', '');
-    body.set('search[regex]', 'false');
-
-    body.set(
-        'RegistrationDateBegin',
-        formatDate(input.startDate)
-    );
-
-    body.set(
-        'RegistrationDateEnd',
-        formatDate(input.endDate)
-    );
-
-    if (input.city) {
-        body.set('City', input.city);
-    }
-
-    if (input.county) {
-        body.set('County', input.county);
-    }
-
-    if (input.status) {
-        body.set('ProjectStatus', input.status);
-    }
-
-    return body;
+    return b.toString();
 }
 
-async function requestWithRetry(url, options = {}) {
-    let lastError;
+async function request(url, options = {}) {
+    let last;
 
     for (let attempt = 1; attempt <= 4; attempt++) {
         try {
@@ -102,106 +92,37 @@ async function requestWithRetry(url, options = {}) {
             });
 
             if (!response.ok) {
-                throw new Error(
-                    `HTTP ${response.status}: ${url}`
-                );
+                throw new Error(`HTTP ${response.status} at ${url}`);
             }
-
             return response;
-        } catch (error) {
-            lastError = error;
-
-            console.warn(
-                `Request attempt ${attempt} failed: ${error.message}`
-            );
-
-            if (attempt < 4) {
-                await sleep(1500 * attempt);
-            }
+        } catch (err) {
+            last = err;
+            if (attempt < 4) await pause(1500 * attempt);
         }
     }
-
-    throw lastError;
+    throw last;
 }
 
-await Actor.init();
+function getCookie(response) {
+    const values = response.headers.getSetCookie?.() ?? [];
+    return values
+        .map(v => v.split(';')[0])
+        .filter(Boolean)
+        .join('; ');
+}
 
-try {
-    const input = await Actor.getInput();
-
-    if (!input?.startDate || !input?.endDate) {
-        throw new Error('Start and end dates are required.');
-    }
-
-    formatDate(input.startDate);
-    formatDate(input.endDate);
-
-    if (input.startDate > input.endDate) {
-        throw new Error('Start date must precede end date.');
-    }
-
-    const pageSize = 50;
-    const maxResults = input.maxResults ?? 10000;
-
-    if (
-        !Number.isInteger(maxResults) ||
-        maxResults < 1
-    ) {
-        throw new Error('maxResults must be a positive integer.');
-    }
-
-    console.log(
-        `TDLR extraction: ${input.startDate} through ${input.endDate}`
-    );
-
-    // Establish a normal public-site session.
-    const session = await requestWithRetry(SEARCH_PAGE);
-
-    // Some sites require a session cookie for subsequent requests.
-    // This is a public search; no login credentials are used.
-    const setCookie = session.headers.get('set-cookie');
-
-    const cookie = setCookie
-        ? setCookie
-            .split(/,(?=\s*[^;,=\s]+=[^;,]+)/)
-            .map((item) => item.split(';')[0].trim())
-            .join('; ')
-        : '';
-
-    const headers = {
-        'Accept': 'application/json, text/javascript, */*; q=0.01',
-        'Content-Type':
-            'application/x-www-form-urlencoded; charset=UTF-8',
-        'X-Requested-With': 'XMLHttpRequest',
-        'Referer': SEARCH_PAGE,
-    };
-
-    if (cookie) {
-        headers.Cookie = cookie;
-    }
-
-    const projects = new Map();
-
-    let start = 0;
+async function collect(startDate, endDate, headers, maxPerMonth) {
+    const records = new Map();
+    let offset = 0;
     let draw = 1;
-    let expectedTotal = null;
+    let expected = null;
 
     while (true) {
-        const body = makeBody(
-            input,
-            start,
-            pageSize,
-            draw
-        );
-
-        const response = await requestWithRetry(
-            SEARCH_API,
-            {
-                method: 'POST',
-                headers,
-                body: body.toString(),
-            }
-        );
+        const response = await request(API, {
+            method: 'POST',
+            headers,
+            body: body(startDate, endDate, offset, 50, draw),
+        });
 
         const result = await response.json();
 
@@ -210,126 +131,198 @@ try {
             !Number.isInteger(result.recordsFiltered)
         ) {
             throw new Error(
-                'Unexpected TDLR response format.'
+                `Unexpected response for ${startDate} to ${endDate}`
             );
         }
 
-        if (expectedTotal === null) {
-            expectedTotal = result.recordsFiltered;
+        if (expected === null) {
+            expected = result.recordsFiltered;
 
-            console.log(
-                `TDLR reports ${expectedTotal} matching registrations.`
-            );
-
-            if (expectedTotal > maxResults) {
+            if (expected > maxPerMonth) {
                 throw new Error(
-                    `Found ${expectedTotal} registrations, ` +
-                    `but maxResults is ${maxResults}. ` +
-                    'Increase the limit to avoid incomplete extraction.'
+                    `${startDate} to ${endDate}: ${expected} ` +
+                    `exceeds maxPerMonth=${maxPerMonth}; ` +
+                    'raise the limit or split this range'
                 );
             }
         }
 
-        if (result.recordsFiltered !== expectedTotal) {
+        if (result.recordsFiltered !== expected) {
             throw new Error(
-                'TDLR result count changed during extraction. ' +
-                'Rerun to obtain a consistent dataset.'
+                `Count changed during ${startDate} to ${endDate}; retry later`
             );
         }
 
-        if (
-            result.data.length === 0 &&
-            start < expectedTotal
-        ) {
+        if (!result.data.length && offset < expected) {
             throw new Error(
-                `Empty page before completion at offset ${start}.`
+                `Premature empty page at ${offset} for ${startDate}`
             );
         }
 
-        for (const project of result.data) {
-            const id = project.ProjectNumber;
-
-            if (!id) {
-                throw new Error(
-                    'Project record is missing its project number.'
-                );
-            }
-
-            if (projects.has(id)) {
-                throw new Error(
-                    `Duplicate project number encountered: ${id}`
-                );
-            }
-
-            const date = String(
-                project.ProjectCreatedOn ?? ''
+        for (const p of result.data) {
+            const id = p.ProjectNumber;
+            const registered = String(
+                p.ProjectCreatedOn ?? ''
             ).slice(0, 10);
 
             if (
-                date < input.startDate ||
-                date > input.endDate
+                !id ||
+                registered < startDate ||
+                registered > endDate ||
+                records.has(id)
             ) {
                 throw new Error(
-                    `Project ${id} is outside the requested date range.`
+                    `Invalid, out-of-range or duplicate record ${id} ` +
+                    `in ${startDate} to ${endDate}`
                 );
             }
 
-            projects.set(id, {
-                ...project,
-                RegistrationDate: date,
-                Source: SEARCH_API,
+            records.set(id, {
+                ...p,
+                RegistrationDate: registered,
+                Source: API,
             });
         }
 
-        start += result.data.length;
+        offset += result.data.length;
 
-        console.log(
-            `Collected ${projects.size} of ${expectedTotal} records.`
-        );
-
-        if (start >= expectedTotal) {
-            break;
-        }
+        if (offset >= expected) break;
 
         draw++;
-
-        // Keep request frequency modest.
-        await sleep(750);
+        await pause(750);
     }
 
-    if (projects.size !== expectedTotal) {
+    if (records.size !== expected) {
         throw new Error(
-            `Incomplete extraction: ${projects.size} ` +
-            `of ${expectedTotal} records.`
+            `Incomplete ${startDate}: ${records.size}/${expected}`
         );
     }
 
-    // Save only after the complete dataset is validated.
-    const records = [...projects.values()];
+    return [...records.values()];
+}
 
-    for (let i = 0; i < records.length; i += 100) {
-        await Actor.pushData(records.slice(i, i + 100));
+await Actor.init();
+
+try {
+    const input = await Actor.getInput() ?? {};
+
+    const startDate = input.startDate ?? '2021-09-01';
+    const endDate = input.endDate ?? '2026-09-18';
+
+    date(startDate);
+    date(endDate);
+
+    if (startDate > endDate) {
+        throw new Error('startDate must be on or before endDate');
     }
 
-    await Actor.setValue('EXTRACTION_SUMMARY', {
-        startDate: input.startDate,
-        endDate: input.endDate,
-        expectedTotal,
-        extractedTotal: records.length,
+    const maxPerMonth = input.maxPerMonth ?? 10000;
+
+    if (!Number.isInteger(maxPerMonth) || maxPerMonth < 1) {
+        throw new Error('maxPerMonth must be a positive integer');
+    }
+
+    const storeName =
+        input.storeName ?? 'tdlr-historical-2021-2026';
+
+    if (!/^[a-zA-Z0-9_-]{3,100}$/.test(storeName)) {
+        throw new Error(
+            'storeName must contain only letters, numbers, ' +
+            'underscores and hyphens'
+        );
+    }
+
+    const store = await Actor.openKeyValueStore(storeName);
+
+    const session = await request(SEARCH_PAGE);
+    const cookie = getCookie(session);
+
+    const headers = {
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        'Content-Type':
+            'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        Referer: SEARCH_PAGE,
+        ...(cookie ? { Cookie: cookie } : {}),
+    };
+
+    const periods = ranges(startDate, endDate);
+    let total = 0;
+
+    for (const [from, to] of periods) {
+        const key =
+            `MONTH_${from.replaceAll('-', '')}_` +
+            `${to.replaceAll('-', '')}`;
+
+        const existing = await store.getValue(key);
+
+        if (
+            existing?.complete &&
+            Array.isArray(existing.records) &&
+            existing.count === existing.records.length
+        ) {
+            console.log(
+                `SKIP ${from} to ${to}: ` +
+                `${existing.count} verified cached records`
+            );
+            total += existing.count;
+            continue;
+        }
+
+        console.log(`FETCH ${from} to ${to}`);
+
+        const records = await collect(
+            from,
+            to,
+            headers,
+            maxPerMonth
+        );
+
+        await store.setValue(key, {
+            complete: true,
+            from,
+            to,
+            count: records.length,
+            fetchedAt: new Date().toISOString(),
+            records,
+        });
+
+        total += records.length;
+
+        console.log(
+            `SAVED ${from} to ${to}: ` +
+            `${records.length}; cumulative ${total}`
+        );
+    }
+
+    const manifest = {
         complete: true,
-        extractedAt: new Date().toISOString(),
-    });
+        startDate,
+        endDate,
+        storeName,
+        months: periods.length,
+        totalRecords: total,
+        finishedAt: new Date().toISOString(),
+        note: 'Raw registrations only. Public-sector and ' +
+              'asset-class enrichment are not yet applied.',
+    };
+
+    await store.setValue('MANIFEST', manifest);
+    await Actor.setValue('BACKFILL_SUMMARY', manifest);
+    await Actor.pushData(manifest);
 
     console.log(
-        `SUCCESS: Saved all ${records.length} registrations.`
+        `BACKFILL COMPLETE: ${total} records ` +
+        `across ${periods.length} monthly batches; ` +
+        `named store ${storeName}`
     );
 
 } catch (error) {
-    console.error('EXTRACTION FAILED:', error);
+    console.error('BACKFILL FAILED:', error.message);
 
-    await Actor.setValue('EXTRACTION_ERROR', {
+    await Actor.setValue('BACKFILL_ERROR', {
         message: error.message,
-        timestamp: new Date().toISOString(),
+        at: new Date().toISOString(),
     });
 
     throw error;
